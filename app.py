@@ -17,8 +17,7 @@ import os
 
 app = Flask(__name__)
 
-TOKEN_API_URL = "https://auto-token-vn-aya.onrender.com/token"  # Thay bằng API của bạn nếu khác
-SECRET_KEY = "ayacte"
+TOKEN_API_URL = "https://aauto-token.onrender.com/api/get_jwt"
 
 async def fetch_tokens_from_api():
     try:
@@ -26,10 +25,13 @@ async def fetch_tokens_from_api():
             async with session.get(TOKEN_API_URL) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return [{"token": t} for t in data.get("tokens", [])]
+                    tokens_dict = data.get("tokens", {})
+                    # تحويل dict إلى list من dicts بالشكل [{"token": "..."}]
+                    return [{"uid": uid, "token": token} for uid, token in tokens_dict.items()]
     except Exception as e:
         app.logger.error(f"Error fetching tokens from API: {e}")
     return None
+
 
 def encrypt_message(plaintext):
     try:
