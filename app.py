@@ -17,6 +17,10 @@ import os
 
 app = Flask(__name__)
 
+# أضف هذا في أعلى الكود
+SECRET_KEY = "ayacte"  # ضع هنا المفتاح الذي تريد استخدامه
+
+
 TOKEN_API_URL = "https://aauto-token.onrender.com/api/get_jwt"
 
 async def fetch_tokens_from_api():
