@@ -14,15 +14,12 @@ from google.protobuf.message import DecodeError
 import random
 import os
 
-
 app = Flask(__name__)
 
-# أضف هذا في أعلى الكود
-SECRET_KEY = "ayacte"  # ضع هنا المفتاح الذي تريد استخدامه
-
-
 TOKEN_API_URL = "https://aauto-token.onrender.com/api/get_jwt"
+SECRET_KEY = "ayacte"
 
+# ------------------- Fetch tokens -------------------
 async def fetch_tokens_from_api():
     try:
         async with aiohttp.ClientSession() as session:
@@ -30,13 +27,13 @@ async def fetch_tokens_from_api():
                 if resp.status == 200:
                     data = await resp.json()
                     tokens_dict = data.get("tokens", {})
-                    # تحويل dict إلى list من dicts بالشكل [{"token": "..."}]
-                    return [{"uid": uid, "token": token} for uid, token in tokens_dict.items()]
+                    tokens_list = [{"uid": uid, "token": t} for uid, t in tokens_dict.items()]
+                    return tokens_list
     except Exception as e:
         app.logger.error(f"Error fetching tokens from API: {e}")
     return None
 
-
+# ------------------- Encryption -------------------
 def encrypt_message(plaintext):
     try:
         key = b'Yg&tc%DEuh6%Zc^8'
@@ -49,6 +46,7 @@ def encrypt_message(plaintext):
         app.logger.error(f"Error encrypting message: {e}")
         return None
 
+# ------------------- Protobuf message -------------------
 def create_protobuf_message(user_id, region):
     try:
         message = like_pb2.like()
@@ -59,6 +57,24 @@ def create_protobuf_message(user_id, region):
         app.logger.error(f"Error creating protobuf message: {e}")
         return None
 
+def create_protobuf(uid):
+    try:
+        message = uid_generator_pb2.uid_generator()
+        message.saturn_ = int(uid)
+        message.garena = 1
+        return message.SerializeToString()
+    except Exception as e:
+        app.logger.error(f"Error creating uid protobuf: {e}")
+        return None
+
+def enc(uid):
+    protobuf_data = create_protobuf(uid)
+    if protobuf_data is None:
+        return None
+    encrypted_uid = encrypt_message(protobuf_data)
+    return encrypted_uid
+
+# ------------------- HTTP Requests -------------------
 async def send_request(encrypted_uid, token, url):
     try:
         edata = bytes.fromhex(encrypted_uid)
@@ -96,19 +112,14 @@ async def send_multiple_requests(uid, server_name, url):
             return None
 
         tokens = await fetch_tokens_from_api()
-        if tokens is None or len(tokens) == 0:
+        if not tokens:
             app.logger.error("Failed to fetch tokens from API.")
             return None
 
-        # Randomly select 100 tokens from the token list
-        if len(tokens) >= 100:
-            selected_tokens = random.sample(tokens, 100)
-        else:
-            selected_tokens = [random.choice(tokens) for _ in range(100)]
-
+        # إرسال 100 طلب باستخدام توكنات عشوائية
         tasks = [
-            send_request(encrypted_uid, token["token"], url)
-            for token in selected_tokens
+            send_request(encrypted_uid, random.choice(tokens)["token"], url)
+            for _ in range(100)
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         return results
@@ -116,22 +127,18 @@ async def send_multiple_requests(uid, server_name, url):
         app.logger.error(f"Exception in send_multiple_requests: {e}")
         return None
 
-def create_protobuf(uid):
+# ------------------- Protobuf decoding -------------------
+def decode_protobuf(binary):
     try:
-        message = uid_generator_pb2.uid_generator()
-        message.saturn_ = int(uid)
-        message.garena = 1
-        return message.SerializeToString()
+        items = like_count_pb2.Info()
+        items.ParseFromString(binary)
+        return items
+    except DecodeError as e:
+        app.logger.error(f"Error decoding Protobuf data: {e}")
+        return None
     except Exception as e:
-        app.logger.error(f"Error creating uid protobuf: {e}")
+        app.logger.error(f"Unexpected error during protobuf decoding: {e}")
         return None
-
-def enc(uid):
-    protobuf_data = create_protobuf(uid)
-    if protobuf_data is None:
-        return None
-    encrypted_uid = encrypt_message(protobuf_data)
-    return encrypted_uid
 
 def make_request(encrypt, server_name, token):
     try:
@@ -157,25 +164,12 @@ def make_request(encrypt, server_name, token):
         hex_data = response.content.hex()
         binary = bytes.fromhex(hex_data)
         decode = decode_protobuf(binary)
-        if decode is None:
-            app.logger.error("Protobuf decoding returned None.")
         return decode
     except Exception as e:
         app.logger.error(f"Error in make_request: {e}")
         return None
 
-def decode_protobuf(binary):
-    try:
-        items = like_count_pb2.Info()
-        items.ParseFromString(binary)
-        return items
-    except DecodeError as e:
-        app.logger.error(f"Error decoding Protobuf data: {e}")
-        return None
-    except Exception as e:
-        app.logger.error(f"Unexpected error during protobuf decoding: {e}")
-        return None
-
+# ------------------- /like endpoint -------------------
 @app.route('/like', methods=['GET'])
 def handle_requests():
     uid = request.args.get("uid")
@@ -189,20 +183,24 @@ def handle_requests():
     try:
         async def process_request():
             tokens = await fetch_tokens_from_api()
-            if tokens is None or len(tokens) == 0:
+            if not tokens:
                 raise Exception("Failed to fetch tokens from API.")
-            token = tokens[0]['token']
+
             encrypted_uid = enc(uid)
             if encrypted_uid is None:
                 raise Exception("Encryption of UID failed.")
 
-            before = make_request(encrypted_uid, server_name, token)
+            # --- جلب معلومات اللاعب قبل اللايك بتوكن عشوائي ---
+            token_for_info = random.choice(tokens)['token']
+            before = make_request(encrypted_uid, server_name, token_for_info)
             if before is None:
                 raise Exception("Failed to retrieve initial player info.")
+
             try:
                 jsone = MessageToJson(before)
             except Exception as e:
                 raise Exception(f"Error converting 'before' protobuf to JSON: {e}")
+
             data_before = json.loads(jsone)
             before_like = data_before.get('AccountInfo', {}).get('Likes', 0)
             try:
@@ -211,6 +209,7 @@ def handle_requests():
                 before_like = 0
             app.logger.info(f"Likes before command: {before_like}")
 
+            # --- إرسال اللايكات ---
             if server_name == "IND":
                 url = "https://client.ind.freefiremobile.com/LikeProfile"
             elif server_name in {"BR", "US", "SAC", "NA"}:
@@ -220,17 +219,22 @@ def handle_requests():
 
             await send_multiple_requests(uid, server_name, url)
 
-            after = make_request(encrypted_uid, server_name, token)
+            # --- جلب معلومات اللاعب بعد اللايك بتوكن عشوائي جديد ---
+            token_for_info_after = random.choice(tokens)['token']
+            after = make_request(encrypted_uid, server_name, token_for_info_after)
             if after is None:
                 raise Exception("Failed to retrieve player info after like requests.")
+
             try:
                 jsone_after = MessageToJson(after)
             except Exception as e:
                 raise Exception(f"Error converting 'after' protobuf to JSON: {e}")
+
             data_after = json.loads(jsone_after)
             after_like = int(data_after.get('AccountInfo', {}).get('Likes', 0))
             player_uid = int(data_after.get('AccountInfo', {}).get('UID', 0))
             player_name = str(data_after.get('AccountInfo', {}).get('PlayerNickname', ''))
+
             like_given = after_like - before_like
             status = 1 if like_given != 0 else 2
             result = {
